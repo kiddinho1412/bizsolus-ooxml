@@ -1,10 +1,20 @@
 package ooxml;
 
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.security.KeyStore;
+import java.security.KeyStoreException;
+import java.security.NoSuchAlgorithmException;
+import java.security.PrivateKey;
+import java.security.UnrecoverableKeyException;
+import java.security.cert.Certificate;
+import java.security.cert.CertificateException;
+import java.security.cert.X509Certificate;
+import java.util.Collections;
 import java.util.UUID;
 
 import javax.xml.parsers.ParserConfigurationException;
@@ -12,6 +22,9 @@ import javax.xml.parsers.ParserConfigurationException;
 import org.apache.commons.io.IOUtils;
 import org.apache.poi.hwpf.usermodel.PictureType;
 import org.apache.poi.openxml4j.exceptions.InvalidFormatException;
+import org.apache.poi.openxml4j.opc.OPCPackage;
+import org.apache.poi.poifs.crypt.dsig.SignatureConfig;
+import org.apache.poi.poifs.crypt.dsig.SignatureInfo;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import org.apache.poi.xwpf.usermodel.XWPFRun;
@@ -38,10 +51,14 @@ public class PoiTest {
 	public static final String SCHEMA_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 	
 	@Test
-	public void test() throws IOException, ParserConfigurationException, SAXException, InvalidFormatException {
-		InputStream docxInputStream = new FileInputStream("C:\\Users\\Son\\Documents\\aaa.docx");
-		InputStream signatueInputStream = new FileInputStream("C:\\Users\\Son\\Documents\\signature.png");
-		OutputStream os = new FileOutputStream("C:\\Users\\Son\\Documents\\" + UUID.randomUUID().toString() + ".docx");
+	public void test() throws IOException, ParserConfigurationException, SAXException, InvalidFormatException, KeyStoreException, NoSuchAlgorithmException, CertificateException, UnrecoverableKeyException {
+		String docPath = "/data/workspace/alfresco/document-digital-signature/document-digital-signature/src/test/resources/docs/doc02.docx";
+		File docFile = new File(docPath);
+		InputStream docxInputStream = new FileInputStream(docFile);
+		File signatureFile = new File("/home/sonnd/Downloads/signature.png");
+		InputStream signatueInputStream = new FileInputStream(signatureFile);
+		File newFile = new File(docFile.getParent() + File.separator + UUID.randomUUID().toString() + ".docx");
+		OutputStream os = new FileOutputStream(newFile);
 		
 		XWPFDocument doc = new XWPFDocument(docxInputStream);
 		String pictureDataRelationId = doc.addPictureData(IOUtils.toByteArray(signatueInputStream), org.apache.poi.xwpf.usermodel.Document.PICTURE_TYPE_PNG);
@@ -92,5 +109,36 @@ public class PoiTest {
 		IOUtils.closeQuietly(signatueInputStream);
 		IOUtils.closeQuietly(docxInputStream);
 		IOUtils.closeQuietly(os);
+		
+		
+		String passphrase = "123";
+		String keyStorePath = "/data/workspace/alfresco/document-digital-signature/document-digital-signature/src/test/resources/keys/mycert.pfx";
+		KeyStore keystore = KeyStore.getInstance("pkcs12");
+		keystore.load(new FileInputStream(keyStorePath), passphrase.toCharArray());
+		String alias = keystore.aliases().nextElement();
+		PrivateKey privateKey = (PrivateKey) keystore.getKey(alias, passphrase.toCharArray());
+		Certificate certificate = keystore.getCertificate(alias);
+		
+		try {
+			SignatureConfig signatureConfig = new SignatureConfig();
+			signatureConfig.setKey(privateKey);
+			signatureConfig.setSigningCertificateChain(
+					Collections.singletonList((X509Certificate) certificate));
+			OPCPackage pkg = OPCPackage.open(newFile);
+			signatureConfig.setOpcPackage(pkg);
+
+			// adding the signature document to the package
+			SignatureInfo si = new SignatureInfo();
+			si.setSignatureConfig(signatureConfig);
+			si.confirmSignature();
+			boolean b = si.verifySignature();
+			assert (b);
+			pkg.save(new FileOutputStream("/tmp/" + UUID.randomUUID().toString() + ".docx"));
+			// write the changes back to disc
+			pkg.close();
+		} catch (Exception ex) {
+			throw new RuntimeException("Failed to sign ms office document", ex);
+		}
 	}
+	
 }
